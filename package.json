@@ -2,7 +2,7 @@
   "name": "ud-4",
   "version": "1.0.0",
   "description": "Este archivo se escribe en formato markdown.",
-  "main": "index.js",
+  "main": "concesionario.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
