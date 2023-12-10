@@ -1,14 +1,18 @@
+const swaggerUi = require("swagger-ui-express");
+const swaggerDocument = require("./swagger.json");
 // Importamos las bibliotecas necesarias.
 // Concretamente el framework express.
 const express = require("express");
 
-const { MongoClient } = require("mongodb");
+const { MongoClient, ObjectId } = require("mongodb");
 // or as an es module:
 // import { MongoClient } from 'mongodb'
 
 // Inicializamos la aplicación
 
 const app = express();
+
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // Indicamos que la aplicación puede recibir JSON (API Rest)
 app.use(express.json());
@@ -24,6 +28,7 @@ const client = new MongoClient(url);
 const dbName = "BaseDeDatos";
 
 let _concesionarios;
+let _coches;
 
 client
   .connect()
@@ -33,6 +38,7 @@ client
     const db = client.db(dbName);
 
     _concesionarios = db.collection("concesionarios");
+    _coches = db.collection("coches");
 
     // Arrancamos la aplicación
     app.listen(port, () => {
@@ -43,44 +49,43 @@ client
     console.log(`Conexión errornea a MongoDB: ${reason}`);
   });
 
-// Definimos una estructura de datos
-// (temporal hasta incorporar una base de datos)
-let concesionarios = [
-  {
-    id: 0,
-    nombre: "Concesionario A",
-    direccion: "Dirección 1",
-    coches: [
-      { cocheId: 0, modelo: "Clio", cv: 145, precio: 20860 },
-      { cocheId: 1, modelo: "Skyline R34", cv: 280, precio: 34450 },
-    ],
-  },
-];
-
 // Endpoint para obtener todos los concesionarios
-app.get("/concesionarios", (request, response) => {
-  //Obtener una coleccion de concesionarios
-  //  const concesionarios = response.json(concesionarios);
-  const cursor = _concesionarios.find();
-  const array = cursor.toArray();
-  response.json(array.lenght >= 0 ? array : []);
+app.get("/concesionarios", async (request, response) => {
+  try {
+    const cursor = _concesionarios.find();
+    const array = await cursor.toArray();
+    const concesionarios = array.map((concesionario) => {
+      const { _id, coches, ...apiConcesionario } = concesionario;
+      return { id: _id, ...apiConcesionario };
+    });
+    response.json(concesionarios);
+  } catch (error) {
+    console.error("Error:", error);
+    response
+      .status(500)
+      .json({ message: "Error al obtener los concesionarios" });
+  }
 });
-
 // Endpoint para crear un nuevo concesionario
 app.post("/concesionarios", (request, response) => {
-  _concesionarios.insertOne(request.body);
-  //concesionarios.push(request.body);
-  then(() => {
-    response.json({ message: "Concesionario creado correctamente" });
-  });
+  _concesionarios
+    .insertOne(request.body)
+    .then(() => {
+      response.json({ message: "Concesionario creado correctamente" });
+    })
+    .catch((error) => {
+      console.error("Error:", error);
+      response.status(500).json({ message: "Error al crear el concesionario" });
+    });
 });
 // Endpoint para obtener un concesionario
 app.get("/concesionarios/:id", async (request, response) => {
-  const id = request.params.id;
   try {
-    const result = await _concesionarios.findOne({ id: parseInt(id) });
-    if (result) {
-      response.json(result);
+    const id = request.params.id; // Obtener el ID desde los parámetros de la URL
+    const concesionario = await _concesionarios.findOne({ _id: new ObjectId(id) });
+    const { coches, ...apiConcesionario } = concesionario;
+    if (apiConcesionario) {
+      response.json(apiConcesionario);
     } else {
       response.status(404).json({ message: "Concesionario no encontrado" });
     }
@@ -89,105 +94,143 @@ app.get("/concesionarios/:id", async (request, response) => {
     response.status(500).json({ message: "Error al obtener el concesionario" });
   }
 });
-
-// Endpoint para actualizar un concesionario
+// Actualizar un concesionario
 app.put("/concesionarios/:id", async (request, response) => {
-  const id = request.params.id;
   try {
-    const updatedResult = await _concesionarios.updateOne(
-      { id: parseInt(id) },
-      { $set: request.body }
+    const id = request.params.id;
+    const updatedConcesionario = request.body;
+    await _concesionarios.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedConcesionario }
     );
     response.json({ message: "Concesionario actualizado correctamente" });
   } catch (error) {
     console.error("Error:", error);
-    response.status(500).json({ message: "Error al actualizar el concesionario" });
+    response
+      .status(500)
+      .json({ message: "Error al actualizar el concesionario" });
   }
 });
-// Endpoint para borrar un concesionario
+
+// Borrar un concesionario
 app.delete("/concesionarios/:id", async (request, response) => {
-  const id = request.params.id;
   try {
-    const deletionResult = await _concesionarios.deleteOne({ id: parseInt(id) });
+    const id = request.params.id;
+    await _concesionarios.deleteOne({ _id: new ObjectId(id) });
     response.json({ message: "Concesionario eliminado correctamente" });
   } catch (error) {
     console.error("Error:", error);
-    response.status(500).json({ message: "Error al eliminar el concesionario" });
+    response
+      .status(500)
+      .json({ message: "Error al eliminar el concesionario" });
   }
 });
-// Endpoint para devolver todos los coches del concesionario pasado por id (solo los coches)
+
+// Obtener todos los coches de un concesionario
 app.get("/concesionarios/:id/coches", async (request, response) => {
-  const id = request.params.id;
   try {
-    const result = await _concesionarios.findOne({ id: parseInt(id) });
-    if (result && result.coches) {
-      response.json(result.coches);
-    } else {
-      response.status(404).json({ message: "No se encontraron coches para este concesionario" });
-    }
+    const id = request.params.id;
+    const array = (await _coches.find({ _concesionario: id }).toArray()) || [];
+    const coches = array.map((car) => {
+      const { _concesionario, ...apiCar } = car;
+      return apiCar;
+    });
+    response.json(coches);
   } catch (error) {
     console.error("Error:", error);
-    response.status(500).json({ message: "Error al obtener los coches del concesionario" });
+    response
+      .status(500)
+      .json({ message: "Error al obtener los coches del concesionario" });
   }
 });
-// Endpoint para añade un nuevo coche al concesionario pasado por id
+
+// Añadir un nuevo coche a un concesionario
 app.post("/concesionarios/:id/coches", async (request, response) => {
-  const id = request.params.id;
-  const cocheCreado = request.body;
   try {
-    const updateResult = await _concesionarios.updateOne(
-      { id: parseInt(id) },
-      { $push: { coches: cocheCreado } }
+    const id = request.params.id;
+    const newCar = request.body;
+    newCar._concesionario = id;
+    const _idCoche = await _coches.insertOne(newCar);
+    await _concesionarios.updateOne(
+      { _id: new ObjectId(id) },
+      { $push: { coches: _idCoche } }
     );
-    response.json({ message: "Coche añadido correctamente" });
+    response.json({ message: "Coche añadido correctamente al concesionario" });
   } catch (error) {
     console.error("Error:", error);
-    response.status(500).json({ message: "Error al añadir el coche al concesionario" });
+    response
+      .status(500)
+      .json({ message: "Error al añadir el coche al concesionario" });
   }
 });
-// Endpoint para obtiene el coche cuyo id sea cocheId, del concesionario pasado por id
+
+// Obtener un coche específico de un concesionario
 app.get("/concesionarios/:id/coches/:cocheId", async (request, response) => {
-  const id = request.params.id;
-  const cocheId = request.params.cocheId;
   try {
-    const result = await _concesionarios.findOne({ id: parseInt(id) });
-    if (result && result.coches && result.coches.length > cocheId) {
-      response.json(result.coches[cocheId]);
+    const id = request.params.id;
+    const cocheId = request.params.cocheId;
+    const concesionario = await _concesionarios.findOne({
+      _id: new ObjectId(id),
+    });
+    if (concesionario) {
+      const car = concesionario.coches.find((car) => car._id == cocheId);
+      if (car) {
+        response.json(car);
+      } else {
+        response
+          .status(404)
+          .json({ message: "Coche no encontrado en el concesionario" });
+      }
     } else {
-      response.status(404).json({ message: "No se encontró el coche para este concesionario" });
+      response.status(404).json({ message: "Concesionario no encontrado" });
     }
   } catch (error) {
     console.error("Error:", error);
-    response.status(500).json({ message: "Error al obtener el coche del concesionario" });
+    response
+      .status(500)
+      .json({ message: "Error al obtener el coche del concesionario" });
   }
 });
-// Endpoint para actualizar el coche cuyo id sea cocheId, del concesionario pasado por id
+
+// Actualizar un coche específico de un concesionario
 app.put("/concesionarios/:id/coches/:cocheId", async (request, response) => {
-  const id = request.params.id;
-  const cocheId = request.params.cocheId;
   try {
-    const updateResult = await _concesionarios.updateOne(
-      { id: parseInt(id), "coches.cocheId": parseInt(cocheId) },
-      { $set: { "coches.$": request.body } }
+    const id = request.params.id;
+    const cocheId = request.params.cocheId;
+    const updatedCar = request.body;
+
+    await _coches.updateOne(
+      { _id: new ObjectId(cocheId) },
+      { $set: updatedCar }
     );
+
     response.json({ message: "Coche actualizado correctamente" });
   } catch (error) {
     console.error("Error:", error);
-    response.status(500).json({ message: "Error al actualizar el coche del concesionario" });
+    response
+      .status(500)
+      .json({ message: "Error al actualizar el coche del concesionario" });
   }
 });
-// Endpoint para borrar el coche cuyo id sea cocheId, del concesionario pasado por id
+// Borrar un coche específico de un concesionario
 app.delete("/concesionarios/:id/coches/:cocheId", async (request, response) => {
-  const id = request.params.id;
-  const cocheId = request.params.cocheId;
   try {
-    const updateResult = await _concesionarios.updateOne(
-      { id: parseInt(id) },
-      { $pull: { coches: { cocheId: parseInt(cocheId) } } }
+    const id = request.params.id;
+    const cocheId = request.params.cocheId;
+
+    await _coches.deleteOne({ _id: new ObjectId(cocheId) });
+
+    await _concesionarios.updateOne(
+      { _id: new ObjectId(id) },
+      { $pull: { coches: { _id: new ObjectId(cocheId) } } } 
     );
-    response.json({ message: "Coche eliminado correctamente" });
+    response.json({
+      message: "Coche eliminado correctamente del concesionario",
+    });
   } catch (error) {
     console.error("Error:", error);
-    response.status(500).json({ message: "Error al eliminar el coche del concesionario" });
+    response
+      .status(500)
+      .json({ message: "Error al eliminar el coche del concesionario" });
   }
 });
